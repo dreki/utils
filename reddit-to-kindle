@@ -1,3 +1,107 @@
 #!/usr/bin/env ruby
+
 require "rubygems"
+require "commander/import"
+require "oj"
 require "httparty"
+require "rainbow"
+require "pp"
+require "yaml"
+require "gmail"
+require "htmlentities"
+require "tempfile"
+
+program :version, "1.0"
+program :description, "Send a reddit article and its top comments to your Kindle."
+
+# ----------------------------------------------------------
+# Config
+
+$amazon = YAML.load_file File.expand_path "~/.amazon.yml"
+$google = YAML.load_file File.expand_path "~/.google.yml"
+
+# ----------------------------------------------------------
+# Support functionality
+
+def status output
+  puts output.color '#606060'
+end
+
+def success output
+  puts output.color :green
+end
+
+def error output, opts={:bail_out => true}
+  puts output.background('#990000')
+  raise "Bailing out" if opts[:bail_out]
+end
+
+# ----------------------------------------------------------
+# Main program
+ 
+command :send do |c|
+  c.syntax = "reddit-to-kindle send [options]"
+  #c.summary = ""
+  #c.description = ""
+  #c.example "description", "command example"
+  #c.option "--some-switch", "Some switch that does something"
+  c.action do |args, options|
+    error "Must specify a reddit post URI" if args.size == 0
+
+    uri = "#{args[0]}.json"
+
+    status "Retrieving #{uri} ..."
+
+    response = HTTParty.get uri
+    error "Error retrieving URI." if not response.code == 200
+
+    post = response[0]["data"]["children"][0]["data"]
+    comments = response[1]["data"]["children"]
+
+    status "Sending \"#{post["title"]}\" to Kindle ..."
+    
+    output = ""
+    
+    output = "#{output}<html><head><title>#{post["title"]}</title></head><body>"
+    
+    output = "#{output}<h1>#{post["title"]}</h1>"
+    output = "#{output}<p>#{post["selftext"]}</p>"
+    
+    comments.each do |comment|
+      comment = comment["data"]
+      upvotes = comment["ups"].to_i - comment["downs"].to_i
+      
+      output = "#{output}<br>"
+      output = %Q{#{output}
+        <strong>#{comment["author"]}</strong>, #{upvotes} upvotes
+        #{HTMLEntities.new.decode comment["body_html"]}
+      }
+    end
+    
+    output = "#{output}</body></html>"
+    attachment = Tempfile.new("reddit-to-kindle")
+    attachment.write output
+    
+    Gmail.new($google["user"], $google["password"]) do |gmail|
+      gmail.deliver do
+        to $amazon["kindle_email"]
+        subject post["title"]
+        # html_part do
+        #   content_type "text/html; charset=UTF-8"
+        #   body output
+        # end
+        text_part do
+          body "(Post attached as HTML.)"
+        end
+        
+        # Kindle requires an attachment.
+        add_file :filename => "#{post["title"]}.html", :content => File.read(attachment.path)
+      end
+    end
+    
+    success "Done."
+    
+    attachment.unlink
+  end
+end
+

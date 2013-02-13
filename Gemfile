@@ -1,2 +1,7 @@
+source "https://rubygems.org"
 gem "httparty"
 gem "commander"
+gem "rainbow"
+gem "oj"
+gem "gmail"
+gem "htmlentities"
